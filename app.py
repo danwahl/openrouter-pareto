@@ -7,16 +7,10 @@ OPENROUTER_URL = "https://openrouter.ai/api/frontend/models/find"
 
 
 def get_tokens_per_dollar(model):
-    tokens = model[
-        [
-            "total_completion_tokens",
-            "total_prompt_tokens",
-            "total_native_tokens_reasoning",
-        ]
-    ].sum()
     dollars = (
         model["completion"] * model["total_completion_tokens"]
         + model["prompt"] * model["total_prompt_tokens"]
+        # Use completion if internal reasoning cost is 0
         + (
             model["internal_reasoning"]
             if model["internal_reasoning"] > 0
@@ -25,7 +19,7 @@ def get_tokens_per_dollar(model):
         * model["total_native_tokens_reasoning"]
         + model["request"] * model["count"]
     )
-    return tokens / dollars
+    return model["total_tokens"] / dollars
 
 
 @st.cache_data
@@ -76,7 +70,14 @@ def load_data():
     ]
     df[pricing_cols] = df[pricing_cols].apply(pd.to_numeric, errors="coerce")
 
-    # Calculate tokens per dollar
+    # Calculate total tokens (per dollar)
+    df["total_tokens"] = df[
+        [
+            "total_completion_tokens",
+            "total_prompt_tokens",
+            "total_native_tokens_reasoning",
+        ]
+    ].sum(axis=1)
     df["tokens_per_dollar"] = df.apply(get_tokens_per_dollar, axis=1)
 
     return df
@@ -88,7 +89,7 @@ st.markdown("# OpenRouter Pareto")
 
 # Add multiselect for organizations
 organizations = st.multiselect(
-    "Organizations",
+    "organizations",
     options=sorted(df.index.get_level_values(0).unique()),
     default=[
         "anthropic",
@@ -111,12 +112,16 @@ else:
 fig = px.scatter(
     filtered_df,
     x="tokens_per_dollar",
-    y="count",
+    y="total_tokens",
     color=filtered_df.index.get_level_values(0),
     hover_name=filtered_df.index.get_level_values(1),
-    hover_data=["tokens_per_dollar", "count"],
     log_x=True,
     log_y=True,
+    labels={
+        "tokens_per_dollar": "tokens/$",
+        "total_tokens": "total tokens",
+        "color": "organization",
+    },
 )
 
 st.plotly_chart(fig)
