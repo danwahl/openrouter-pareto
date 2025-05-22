@@ -2,6 +2,7 @@ import requests
 import pandas as pd
 import plotly.express as px
 import streamlit as st
+from datetime import datetime
 
 OPENROUTER_URL = "https://openrouter.ai/api/frontend/models/find"
 
@@ -30,7 +31,8 @@ def load_data():
     models = []
     for model in data["data"]["models"]:
         try:
-            slug = model["endpoint"].get("model_variant_permaslug", model["slug"])
+            slug = model["endpoint"].get(
+                "model_variant_permaslug", model["slug"])
             models.append(
                 {
                     "name": model["name"],
@@ -80,10 +82,12 @@ def load_data():
     ].sum(axis=1)
     df["tokens_per_dollar"] = df.apply(get_tokens_per_dollar, axis=1)
 
-    return df
+    # Return both dataframe and timestamp
+    return df, datetime.now()
 
 
-df = load_data()
+# Load data and timestamp
+df, last_updated = load_data()
 
 st.markdown("# OpenRouter Pareto")
 
@@ -108,6 +112,16 @@ if organizations:
 else:
     filtered_df = df
 
+# Create columns for the header area
+col1, col2 = st.columns([3, 1])
+
+with col1:
+    st.write(f"**Last updated:** {last_updated.strftime('%Y-%m-%d %H:%M:%S')}")
+
+with col2:
+    if st.button("🔄 Refresh Data"):
+        st.cache_data.clear()
+        st.rerun()
 
 fig = px.scatter(
     filtered_df,
