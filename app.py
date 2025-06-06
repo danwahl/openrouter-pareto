@@ -1,8 +1,11 @@
 import requests
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
+import numpy as np
 from datetime import datetime
+from scipy import stats
 
 OPENROUTER_URL = "https://openrouter.ai/api/frontend/models/find"
 
@@ -23,6 +26,72 @@ def get_tokens_per_dollar(model):
     return model["total_tokens"] / dollars
 
 
+def calculate_model_scores(df):
+    # Work with log values since we're using log scales
+    log_tokens_per_dollar = np.log10(df["tokens_per_dollar"])
+    log_total_tokens = np.log10(df["total_tokens"])
+
+    # Remove any infinite or NaN values
+    mask = np.isfinite(log_tokens_per_dollar) & np.isfinite(log_total_tokens)
+    log_tokens_per_dollar_clean = log_tokens_per_dollar[mask]
+    log_total_tokens_clean = log_total_tokens[mask]
+
+    # Fit linear regression using scipy.stats.linregress
+    slope, intercept, r_value, p_value, std_err = stats.linregress(
+        log_tokens_per_dollar_clean, log_total_tokens_clean
+    )
+
+    # Predict for all data points
+    log_predicted = slope * log_tokens_per_dollar + intercept
+
+    # Calculate residuals (actual - predicted in log space)
+    residuals = log_total_tokens - log_predicted
+
+    # Convert to z-scores (standardize residuals)
+    residual_mean = np.nanmean(residuals)
+    residual_std = np.nanstd(residuals)
+    z_scores = (residuals - residual_mean) / residual_std
+
+    # Create results dataframe
+    results_df = df.copy()
+    results_df["predicted_total_tokens"] = 10**log_predicted
+    results_df["score"] = z_scores
+    results_df["log_residual"] = residuals
+
+    return results_df
+
+
+def find_pareto_frontier(df):
+    # Create a copy for manipulation
+    data = df[["tokens_per_dollar", "total_tokens"]].copy()
+
+    # Find Pareto optimal points
+    pareto_mask = np.ones(len(data), dtype=bool)
+
+    for i in range(len(data)):
+        if pareto_mask[i]:
+            # Check if any other point dominates this one
+            # A point dominates if it has both higher tokens_per_dollar AND higher total_tokens
+            dominated_mask = (
+                (data["tokens_per_dollar"] >= data.iloc[i]["tokens_per_dollar"])
+                & (data["total_tokens"] >= data.iloc[i]["total_tokens"])
+                & (
+                    (data["tokens_per_dollar"] > data.iloc[i]["tokens_per_dollar"])
+                    | (data["total_tokens"] > data.iloc[i]["total_tokens"])
+                )
+            )
+
+            if dominated_mask.any():
+                pareto_mask[i] = False
+
+    pareto_df = df[pareto_mask].copy()
+
+    # Sort by tokens_per_dollar for proper line connection
+    pareto_df = pareto_df.sort_values("tokens_per_dollar")
+
+    return pareto_df
+
+
 @st.cache_data
 def load_data():
     response = requests.get(OPENROUTER_URL)
@@ -31,8 +100,7 @@ def load_data():
     models = []
     for model in data["data"]["models"]:
         try:
-            slug = model["endpoint"].get(
-                "model_variant_permaslug", model["slug"])
+            slug = model["endpoint"].get("model_variant_permaslug", model["slug"])
             models.append(
                 {
                     "name": model["name"],
@@ -89,12 +157,15 @@ def load_data():
 # Load data and timestamp
 df, last_updated = load_data()
 
+# Calculate model scores
+scored_df = calculate_model_scores(df)
+
 st.markdown("# OpenRouter Pareto")
 
 # Add multiselect for organizations
 organizations = st.multiselect(
     "organizations",
-    options=sorted(df.index.get_level_values(0).unique()),
+    options=sorted(scored_df.index.get_level_values(0).unique()),
     default=[
         "anthropic",
         "deepseek",
@@ -108,9 +179,12 @@ organizations = st.multiselect(
 )
 
 if organizations:
-    filtered_df = df[df.index.get_level_values(0).isin(organizations)]
+    filtered_df = scored_df[scored_df.index.get_level_values(0).isin(organizations)]
 else:
-    filtered_df = df
+    filtered_df = scored_df
+
+# Find Pareto frontier
+pareto_df = find_pareto_frontier(filtered_df)
 
 # Create columns for the header area
 col1, col2 = st.columns([3, 1])
@@ -123,12 +197,14 @@ with col2:
         st.cache_data.clear()
         st.rerun()
 
+# Create scatter plot
 fig = px.scatter(
     filtered_df,
     x="tokens_per_dollar",
     y="total_tokens",
     color=filtered_df.index.get_level_values(0),
     hover_name=filtered_df.index.get_level_values(1),
+    hover_data={"score": ":.2f"},
     log_x=True,
     log_y=True,
     labels={
@@ -138,4 +214,48 @@ fig = px.scatter(
     },
 )
 
-st.plotly_chart(fig)
+if len(pareto_df) > 1:
+    fig.add_trace(
+        go.Scatter(
+            x=pareto_df["tokens_per_dollar"],
+            y=pareto_df["total_tokens"],
+            mode="lines",
+            name="pareto",
+            line=dict(color="white", width=1),
+            customdata=pareto_df["score"],
+        )
+    )
+
+st.plotly_chart(fig, use_container_width=True)
+
+# Prepare display dataframe
+display_df = filtered_df.reset_index()
+display_df = display_df[
+    [
+        "organization",
+        "model",
+        "tokens_per_dollar",
+        "total_tokens",
+        "score",
+    ]
+]
+
+# add pareto indicator if pareto_df contains the model
+display_df["is_pareto"] = display_df.apply(
+    lambda row: row["organization"] in pareto_df.index.get_level_values(0)
+    and row["model"] in pareto_df.index.get_level_values(1),
+    axis=1,
+)
+
+# Sort by score (best first)
+display_df = display_df.sort_values("score", ascending=False)
+
+# Add Pareto indicator column for display
+display_df["pareto"] = display_df["is_pareto"].apply(lambda x: "🏆" if x else "")
+
+# Reorder columns
+display_df = display_df[
+    ["pareto", "organization", "model", "tokens_per_dollar", "total_tokens", "score"]
+]
+
+st.dataframe(display_df, use_container_width=True, hide_index=True)
