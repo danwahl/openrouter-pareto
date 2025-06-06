@@ -197,34 +197,44 @@ with col2:
         st.cache_data.clear()
         st.rerun()
 
-# Create scatter plot
-fig = px.scatter(
-    filtered_df,
-    x="tokens_per_dollar",
-    y="total_tokens",
-    color=filtered_df.index.get_level_values(0),
-    hover_name=filtered_df.index.get_level_values(1),
-    hover_data={"score": ":.2f"},
-    log_x=True,
-    log_y=True,
-    labels={
-        "tokens_per_dollar": "tokens/$",
-        "total_tokens": "total tokens",
-        "color": "organization",
-    },
-)
+# Create base figure with log scales
+fig = go.Figure()
 
+# Add Pareto line
 if len(pareto_df) > 1:
     fig.add_trace(
         go.Scatter(
             x=pareto_df["tokens_per_dollar"],
             y=pareto_df["total_tokens"],
             mode="lines",
-            name="pareto",
+            name="frontier",
             line=dict(color="white", width=1),
             customdata=pareto_df["score"],
         )
     )
+
+# Add scatter plot points
+for org in filtered_df.index.get_level_values(0).unique():
+    org_data = filtered_df[filtered_df.index.get_level_values(0) == org]
+    fig.add_trace(
+        go.Scatter(
+            x=org_data["tokens_per_dollar"],
+            y=org_data["total_tokens"],
+            mode="markers",
+            name=org,
+            customdata=org_data["score"],
+            text=[model for _, model in org_data.index],
+            hovertemplate="<b>%{text}</b><br>"
+            + "tokens/$: %{x:,.0f}<br>"
+            + "total tokens: %{y:,.0f}<br>"
+            + "score: %{customdata:.2f}<extra></extra>",
+        )
+    )
+
+# Set log scales and labels
+fig.update_xaxes(type="log", title="tokens/$")
+fig.update_yaxes(type="log", title="total tokens")
+fig.update_layout(showlegend=True)
 
 st.plotly_chart(fig, use_container_width=True)
 
@@ -251,7 +261,7 @@ display_df["is_pareto"] = display_df.apply(
 display_df = display_df.sort_values("score", ascending=False)
 
 # Add Pareto indicator column for display
-display_df["pareto"] = display_df["is_pareto"].apply(lambda x: "🏆" if x else "")
+display_df["pareto"] = display_df["is_pareto"].apply(lambda x: "✨" if x else "")
 
 # Reorder columns
 display_df = display_df[
