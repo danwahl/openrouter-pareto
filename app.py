@@ -63,7 +63,7 @@ def calculate_model_scores(df):
 
 def find_pareto_frontier(df):
     # Create a copy for manipulation
-    data = df[["tokens_per_dollar", "total_tokens"]].copy()
+    data = df[["total_tokens", "total_dollars"]].copy()
 
     # Find Pareto optimal points
     pareto_mask = np.ones(len(data), dtype=bool)
@@ -71,12 +71,12 @@ def find_pareto_frontier(df):
     for i in range(len(data)):
         if pareto_mask[i]:
             # Check if any other point dominates this one
-            # A point dominates if it has both higher tokens_per_dollar AND higher total_tokens
+            # A point dominates if it has both higher total_dollars AND higher total_tokens
             dominated_mask = (
-                (data["tokens_per_dollar"] >= data.iloc[i]["tokens_per_dollar"])
+                (data["total_dollars"] >= data.iloc[i]["total_dollars"])
                 & (data["total_tokens"] >= data.iloc[i]["total_tokens"])
                 & (
-                    (data["tokens_per_dollar"] > data.iloc[i]["tokens_per_dollar"])
+                    (data["total_dollars"] > data.iloc[i]["total_dollars"])
                     | (data["total_tokens"] > data.iloc[i]["total_tokens"])
                 )
             )
@@ -149,6 +149,7 @@ def load_data():
         ]
     ].sum(axis=1)
     df["tokens_per_dollar"] = df.apply(get_tokens_per_dollar, axis=1)
+    df["total_dollars"] = df["total_tokens"] / df["tokens_per_dollar"]
 
     # Return both dataframe and timestamp
     return df, datetime.now()
@@ -204,7 +205,7 @@ fig = go.Figure()
 if len(pareto_df) > 1:
     fig.add_trace(
         go.Scatter(
-            x=pareto_df["tokens_per_dollar"],
+            x=pareto_df["total_dollars"],
             y=pareto_df["total_tokens"],
             mode="lines",
             name="frontier",
@@ -218,22 +219,22 @@ for org in filtered_df.index.get_level_values(0).unique():
     org_data = filtered_df[filtered_df.index.get_level_values(0) == org]
     fig.add_trace(
         go.Scatter(
-            x=org_data["tokens_per_dollar"],
+            x=org_data["total_dollars"],
             y=org_data["total_tokens"],
             mode="markers",
             name=org,
             customdata=org_data["score"],
             text=[model for _, model in org_data.index],
             hovertemplate="<b>%{text}</b><br>"
-            + "tokens/$: %{x:,.0f}<br>"
-            + "total tokens: %{y:,.0f}<br>"
+            + "$: %{x:,.0f}<br>"
+            + "tokens: %{y:,.0f}<br>"
             + "score: %{customdata:.2f}<extra></extra>",
         )
     )
 
 # Set log scales and labels
-fig.update_xaxes(type="log", title="tokens/$")
-fig.update_yaxes(type="log", title="total tokens")
+fig.update_xaxes(type="log", title="$")
+fig.update_yaxes(type="log", title="tokens")
 fig.update_layout(showlegend=True)
 
 st.plotly_chart(fig, use_container_width=True)
@@ -246,6 +247,7 @@ display_df = display_df[
         "model",
         "tokens_per_dollar",
         "total_tokens",
+        "total_dollars",
         "score",
     ]
 ]
@@ -265,7 +267,7 @@ display_df["pareto"] = display_df["is_pareto"].apply(lambda x: "✨" if x else "
 
 # Reorder columns
 display_df = display_df[
-    ["pareto", "organization", "model", "tokens_per_dollar", "total_tokens", "score"]
+    ["pareto", "organization", "model", "tokens_per_dollar", "total_tokens", "total_dollars", "score"]
 ]
 
 st.dataframe(display_df, use_container_width=True, hide_index=True)
