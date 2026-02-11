@@ -23,6 +23,8 @@ def get_tokens_per_dollar(model):
         * model["total_native_tokens_reasoning"]
         + model["request"] * model["count"]
     )
+    if dollars == 0:
+        return 0
     return model["total_tokens"] / dollars
 
 
@@ -100,13 +102,26 @@ def load_data():
     models = []
     for model in data["data"]["models"]:
         try:
+            if not model.get("endpoint"):
+                continue
+
             slug = model["endpoint"].get("model_variant_permaslug", model["slug"])
+            
+            # Try to find analytics for the slug or the top-level slug
+            analytics = data["data"]["analytics"].get(slug)
+            if not analytics:
+                slug = model["slug"]
+                analytics = data["data"]["analytics"].get(slug)
+            
+            if not analytics:
+                continue
+
             models.append(
                 {
                     "name": model["name"],
                     "is_free": model["endpoint"]["is_free"],
                     **model["endpoint"]["pricing"],
-                    **data["data"]["analytics"][slug],
+                    **analytics,
                 }
             )
         except Exception:
@@ -123,13 +138,13 @@ def load_data():
     # Index by organization and model names
     df[["organization", "model"]] = (
         df["variant_permaslug"]
-        .apply(lambda x: x.split("/"))
+        .apply(lambda x: x.split("/", 1))
         .apply(lambda x: pd.Series(x))
     )
     df.set_index(["organization", "model"], inplace=True)
     df.sort_index(inplace=True)
 
-    # Convert pricing columns to numeric
+    # Convert pricing columns to numeric and fill with 0
     pricing_cols = [
         "prompt",
         "completion",
@@ -138,16 +153,24 @@ def load_data():
         "web_search",
         "internal_reasoning",
     ]
-    df[pricing_cols] = df[pricing_cols].apply(pd.to_numeric, errors="coerce")
+    for col in pricing_cols:
+        if col not in df.columns:
+            df[col] = 0
+    df[pricing_cols] = df[pricing_cols].apply(pd.to_numeric, errors="coerce").fillna(0)
+
+    # Convert token columns to numeric and fill with 0
+    token_cols = [
+        "total_completion_tokens",
+        "total_prompt_tokens",
+        "total_native_tokens_reasoning",
+    ]
+    for col in token_cols:
+        if col not in df.columns:
+            df[col] = 0
+    df[token_cols] = df[token_cols].apply(pd.to_numeric, errors="coerce").fillna(0)
 
     # Calculate total tokens (per dollar)
-    df["total_tokens"] = df[
-        [
-            "total_completion_tokens",
-            "total_prompt_tokens",
-            "total_native_tokens_reasoning",
-        ]
-    ].sum(axis=1)
+    df["total_tokens"] = df[token_cols].sum(axis=1)
     df["tokens_per_dollar"] = df.apply(get_tokens_per_dollar, axis=1)
     df["total_dollars"] = df["total_tokens"] / df["tokens_per_dollar"]
 
@@ -157,6 +180,10 @@ def load_data():
 
 # Load data and timestamp
 df, last_updated = load_data()
+
+# Filter for models that have data to score (both tokens and efficiency > 0)
+mask = (df["tokens_per_dollar"] > 0) & (df["total_tokens"] > 0)
+df = df[mask].copy()
 
 # Calculate model scores
 scored_df = calculate_model_scores(df)
@@ -171,8 +198,8 @@ organizations = st.multiselect(
         "anthropic",
         "deepseek",
         "google",
-        "meta-llama",
         "mistralai",
+        "moonshotai",
         "openai",
         "qwen",
         "x-ai",
