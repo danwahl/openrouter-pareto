@@ -7,7 +7,7 @@ import numpy as np
 from datetime import datetime
 from scipy import stats
 
-OPENROUTER_URL = "https://openrouter.ai/api/frontend/models/find"
+OPENROUTER_URL = "https://openrouter.ai/api/frontend/v1/models/find"
 
 
 def get_tokens_per_dollar(model):
@@ -190,20 +190,21 @@ scored_df = calculate_model_scores(df)
 
 st.markdown("# OpenRouter Pareto")
 
+# Default to the orgs holding the top N models by score, one slot per org,
+# where N is the number of distinct colors in the default palette
+n_colors = len(px.colors.qualitative.Plotly)
+default_organizations = []
+for org, _ in scored_df.sort_values("score", ascending=False).index:
+    if org not in default_organizations:
+        default_organizations.append(org)
+        if len(default_organizations) == n_colors:
+            break
+
 # Add multiselect for organizations
 organizations = st.multiselect(
     "organizations",
     options=sorted(scored_df.index.get_level_values(0).unique()),
-    default=[
-        "anthropic",
-        "deepseek",
-        "google",
-        "mistralai",
-        "moonshotai",
-        "openai",
-        "qwen",
-        "x-ai",
-    ],
+    default=default_organizations,
 )
 
 if organizations:
